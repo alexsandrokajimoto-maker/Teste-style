@@ -1,15 +1,18 @@
-
 import React, { useState, useCallback, useEffect } from 'react';
 import { Header } from './components/Header';
 import { ModelUploader } from './components/ModelUploader';
 import { ProductPanel } from './components/ProductPanel';
 import { ResultDisplay } from './components/ResultDisplay';
-import { generateStyledImage, generateOutfitVideo } from './services/geminiService';
-import { BodyPartCategory, Product, BodyPart } from './types';
-import { BODY_PART_CONFIG } from './constants';
+import { generateStyledImage, generateOutfitVideo, identifyAndGenerateLook } from './services/geminiService';
+import { BodyPartCategory, Product, ProductAdjustments } from './types';
 import { PersonIcon } from './components/icons/PersonIcon';
 import { VideoIcon } from './components/icons/VideoIcon';
+import { LightningIcon } from './components/icons/LightningIcon';
 import { useApiKey } from './hooks/useApiKey';
+import { getTranslator } from './lib/i18n';
+import { LightningCaptureModal } from './components/LightningCaptureModal';
+
+const t = getTranslator();
 
 const App: React.FC = () => {
     const [modelImage, setModelImage] = useState<string | null>(null);
@@ -20,8 +23,9 @@ const App: React.FC = () => {
     const [isLoadingVideo, setIsLoadingVideo] = useState<boolean>(false);
     const [videoStatus, setVideoStatus] = useState<string>('');
     const [error, setError] = useState<string | null>(null);
+    const [isLightningModalOpen, setLightningModalOpen] = useState(false);
 
-    const { hasApiKey, checkAndPromptApiKey, resetApiKey } = useApiKey();
+    const { checkAndPromptApiKey, resetApiKey } = useApiKey();
 
     const handleModelImageUpload = (file: File) => {
         const reader = new FileReader();
@@ -41,22 +45,52 @@ const App: React.FC = () => {
                 ...prev,
                 [category]: {
                     file,
-                    preview: reader.result as string
+                    preview: reader.result as string,
+                    adjustments: {}
                 }
             }));
         };
         reader.readAsDataURL(file);
     };
 
+    const handleRemoveProduct = (category: BodyPartCategory) => {
+        setProducts(prev => {
+            const newProducts = { ...prev };
+            delete newProducts[category];
+            return newProducts;
+        });
+    };
+
+    const handleProductAdjustmentChange = (category: BodyPartCategory, adjustments: ProductAdjustments) => {
+        setProducts(prev => {
+            if (!prev[category]) return prev;
+            return {
+                ...prev,
+                [category]: {
+                    ...prev[category]!,
+                    adjustments: { ...prev[category]!.adjustments, ...adjustments }
+                }
+            };
+        });
+    };
+    
+    const handleLightningSuccess = ({model, generated}: {model: string, generated: string}) => {
+        setModelImage(model);
+        setGeneratedImage(generated);
+        setProducts({});
+        setGeneratedVideo(null);
+        setError(null);
+    }
+
     const handleGenerateImage = useCallback(async () => {
         if (!modelImage) {
-            setError("Please upload a model image first.");
+            setError(t('errorModelFirst'));
             return;
         }
 
         const activeProducts = Object.entries(products).filter(([, product]) => product);
         if (activeProducts.length === 0) {
-            setError("Please add at least one product to generate a look.");
+            setError(t('errorProductFirst'));
             return;
         }
 
@@ -70,7 +104,7 @@ const App: React.FC = () => {
             setGeneratedImage(`data:image/png;base64,${result}`);
         } catch (err) {
             console.error(err);
-            setError("Failed to generate image. Please try again.");
+            setError(t('errorGenerateImage'));
         } finally {
             setIsLoadingImage(false);
         }
@@ -78,14 +112,12 @@ const App: React.FC = () => {
     
     const handleGenerateVideo = useCallback(async () => {
         if (!generatedImage) {
-            setError("Please generate an image first.");
+            setError(t('errorGenerateImageFirst'));
             return;
         }
 
         const canProceed = await checkAndPromptApiKey();
-        if (!canProceed) {
-            return; 
-        }
+        if (!canProceed) return; 
 
         setIsLoadingVideo(true);
         setError(null);
@@ -101,17 +133,17 @@ const App: React.FC = () => {
                 },
                 (err) => {
                     if (err.message.includes("Requested entity was not found")) {
-                        setError("API Key error. Please re-select your API key.");
+                        setError(t('errorApiKey'));
                         resetApiKey();
                     } else {
-                        setError("Failed to generate video. Please try again.");
+                        setError(t('errorGenerateVideo'));
                     }
                     setIsLoadingVideo(false);
                     console.error(err);
                 }
             );
         } catch (err: any) {
-            setError(`An unexpected error occurred: ${err.message}`);
+            setError(`${t('errorUnexpected')}: ${err.message}`);
             setIsLoadingVideo(false);
         }
     }, [generatedImage, checkAndPromptApiKey, resetApiKey]);
@@ -126,20 +158,30 @@ const App: React.FC = () => {
             <div className="min-h-screen bg-gray-900 bg-opacity-80 backdrop-blur-sm">
                 <Header />
                 <main className="p-4 md:p-8">
+                    {isLightningModalOpen && (
+                        <LightningCaptureModal
+                            onClose={() => setLightningModalOpen(false)}
+                            onSuccess={handleLightningSuccess}
+                            onError={(e) => setError(e)}
+                        />
+                    )}
                     <div className="grid grid-cols-1 lg:grid-cols-12 gap-8 max-w-7xl mx-auto">
                         
-                        {/* Left Panel: Uploader & Products */}
                         <div className="lg:col-span-4 bg-gray-800 bg-opacity-70 rounded-2xl p-6 shadow-2xl border border-gray-700">
                             <ModelUploader onImageUpload={handleModelImageUpload} modelImage={modelImage} />
                             {modelImage && (
                                 <div className="mt-6">
-                                    <h2 className="text-xl font-bold text-gray-200 mb-4">Add Products</h2>
-                                    <ProductPanel onProductUpload={handleProductUpload} products={products} />
+                                    <h2 className="text-xl font-bold text-gray-200 mb-4">{t('addProducts')}</h2>
+                                    <ProductPanel 
+                                        products={products}
+                                        onProductUpload={handleProductUpload} 
+                                        onRemoveProduct={handleRemoveProduct}
+                                        onAdjustmentChange={handleProductAdjustmentChange}
+                                    />
                                 </div>
                             )}
                         </div>
 
-                        {/* Right Panel: Results & Actions */}
                         <div className="lg:col-span-8 bg-gray-800 bg-opacity-70 rounded-2xl p-6 shadow-2xl flex flex-col border border-gray-700">
                             <ResultDisplay 
                                 generatedImage={generatedImage} 
@@ -154,12 +196,20 @@ const App: React.FC = () => {
 
                             <div className="mt-auto pt-6 flex flex-col sm:flex-row gap-4 justify-center">
                                 <button
+                                    onClick={() => setLightningModalOpen(true)}
+                                    disabled={isLoadingImage || isLoadingVideo}
+                                    className="flex items-center justify-center gap-3 px-8 py-4 bg-yellow-500 text-gray-900 font-bold rounded-lg shadow-lg hover:bg-yellow-400 transition-all duration-300 disabled:bg-gray-600 disabled:text-white disabled:cursor-not-allowed transform hover:scale-105 disabled:scale-100"
+                                >
+                                    <LightningIcon />
+                                    {t('lightningClick')}
+                                </button>
+                                <button
                                     onClick={handleGenerateImage}
                                     disabled={!modelImage || isLoadingImage || isLoadingVideo || activeProductsCount === 0}
                                     className="flex items-center justify-center gap-3 px-8 py-4 bg-purple-600 text-white font-bold rounded-lg shadow-lg hover:bg-purple-700 transition-all duration-300 disabled:bg-gray-600 disabled:cursor-not-allowed transform hover:scale-105 disabled:scale-100"
                                 >
                                     <PersonIcon />
-                                    {isLoadingImage ? 'Styling...' : 'Generate Look'}
+                                    {isLoadingImage ? t('styling') : t('generateLook')}
                                 </button>
                                 <button
                                     onClick={handleGenerateVideo}
@@ -167,7 +217,7 @@ const App: React.FC = () => {
                                     className="flex items-center justify-center gap-3 px-8 py-4 bg-teal-500 text-white font-bold rounded-lg shadow-lg hover:bg-teal-600 transition-all duration-300 disabled:bg-gray-600 disabled:cursor-not-allowed transform hover:scale-105 disabled:scale-100"
                                 >
                                     <VideoIcon />
-                                    {isLoadingVideo ? 'Creating Video...' : 'Create Video'}
+                                    {isLoadingVideo ? t('creatingVideo') : t('createVideo')}
                                 </button>
                             </div>
                         </div>
