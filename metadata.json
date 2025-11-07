@@ -1,0 +1,7 @@
+{
+  "name": "Copy of StyleSync",
+  "description": "An elegant virtual try-on application where users can upload a photo of themselves, add various clothing items and accessories, and generate a realistic image or video of their new look.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
